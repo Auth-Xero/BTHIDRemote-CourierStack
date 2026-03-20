@@ -9,20 +9,27 @@ import android.os.Binder
 import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
+import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.courierstack.hidremote.MainActivity
 import com.courierstack.hidremote.R
 import com.courierstack.hidremote.data.AppSettings
 import com.courierstack.hidremote.data.ConnectionState
+import com.courierstack.hidremote.data.HidBackendMode
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.collectLatest
 
 /**
  * Foreground service to maintain HID connection when app is in background.
+ *
+ * Creates the appropriate [IHidDeviceManager] backend based on settings:
+ * - [HidBackendMode.ANDROID_NATIVE] → [AndroidHidDeviceManager] (default)
+ * - [HidBackendMode.COURIER_STACK] → [CourierHidDeviceManager] (experimental backup)
  */
 class HidConnectionService : Service() {
 
     companion object {
+        private const val TAG = "HidConnectionService"
         const val CHANNEL_ID = "hid_connection_channel"
         private const val NOTIFICATION_ID = 1001
         private const val WAKE_LOCK_TAG = "BTHidRemote::ConnectionWakeLock"
@@ -35,7 +42,12 @@ class HidConnectionService : Service() {
     private val binder = LocalBinder()
     private var scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
 
-    var hidManager: HidDeviceManager? = null
+    /** The active HID backend. Type is the interface so ViewModel is backend-agnostic. */
+    var hidManager: IHidDeviceManager? = null
+        private set
+
+    /** Which backend mode is currently active. */
+    var activeBackendMode: HidBackendMode = HidBackendMode.ANDROID_NATIVE
         private set
 
     private var wakeLock: PowerManager.WakeLock? = null
@@ -47,7 +59,8 @@ class HidConnectionService : Service() {
 
     override fun onCreate() {
         super.onCreate()
-        hidManager = HidDeviceManager(applicationContext)
+        // Create the default backend. It will be replaced if settings specify a different one.
+        hidManager = createBackend(HidBackendMode.ANDROID_NATIVE)
     }
 
     override fun onBind(intent: Intent?): IBinder = binder
@@ -66,9 +79,6 @@ class HidConnectionService : Service() {
                 stopService()
             }
         }
-        // Don't auto-restart: HAL state is lost after process death so a
-        // zombie service would just show a stale notification. The user
-        // will reopen the app and re-initialize.
         return START_NOT_STICKY
     }
 
@@ -183,23 +193,47 @@ class HidConnectionService : Service() {
         hidManager?.shutdown()
         releaseWakeLock()
         scope.cancel()
-        // Recreate scope so startForegroundService() can launch coroutines again
         scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
         stopForeground(STOP_FOREGROUND_REMOVE)
-        // Do NOT create a new HidDeviceManager — the ViewModel holds a reference
-        // to the current one. Since shutdown() nulls all internal managers and
-        // recreates its scope, the same instance can be re-initialized.
-        // Also do NOT call stopSelf() — the ViewModel still holds a binding
-        // (BIND_AUTO_CREATE) so the service stays alive ready for re-init.
     }
 
+    /**
+     * Create the correct backend implementation for the given mode.
+     */
+    private fun createBackend(mode: HidBackendMode): IHidDeviceManager {
+        return when (mode) {
+            HidBackendMode.ANDROID_NATIVE -> AndroidHidDeviceManager(applicationContext)
+            HidBackendMode.COURIER_STACK -> CourierHidDeviceManager(applicationContext)
+        }
+    }
+
+    /**
+     * Switch the backend if the requested mode differs from the active one.
+     * The old backend is shut down and a new one is created.
+     *
+     * This should only be called when the stack is NOT initialized (i.e., before
+     * [initialize] or after [stopService]).
+     */
+    fun ensureBackend(mode: HidBackendMode) {
+        if (mode == activeBackendMode && hidManager != null) return
+
+        Log.i(TAG, "Switching backend: $activeBackendMode → $mode")
+        hidManager?.shutdown()
+        activeBackendMode = mode
+        hidManager = createBackend(mode)
+    }
+
+    /**
+     * Initialize the HID stack with the given settings.
+     * Automatically selects the correct backend based on [AppSettings.hidBackendMode].
+     */
     suspend fun initialize(settings: AppSettings): Boolean {
+        ensureBackend(settings.hidBackendMode)
         return hidManager?.initialize(settings) ?: false
     }
 
     override fun onDestroy() {
         super.onDestroy()
-        // Final cleanup — service is truly being destroyed (unbound + stopped)
         isRunning = false
         hidManager?.shutdown()
         releaseWakeLock()

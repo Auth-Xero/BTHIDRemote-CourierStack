@@ -13,6 +13,17 @@ enum class DeviceMode(val displayName: String) {
 }
 
 /**
+ * Bluetooth HID backend implementation to use.
+ *
+ * ANDROID_NATIVE uses Android's built-in BluetoothHidDevice API (default, no root needed).
+ * COURIER_STACK uses the CourierStack low-level library (experimental backup, requires root).
+ */
+enum class HidBackendMode(val displayName: String) {
+    ANDROID_NATIVE("Android Native (Default)"),
+    COURIER_STACK("CourierStack (Experimental)")
+}
+
+/**
  * Connection state of the HID device.
  */
 enum class ConnectionState {
@@ -96,6 +107,7 @@ data class MouseButtonState(
 data class AppSettings(
     val deviceName: String = "BT HID Remote",
     val deviceMode: DeviceMode = DeviceMode.COMBO,
+    val hidBackendMode: HidBackendMode = HidBackendMode.ANDROID_NATIVE,
     val hapticFeedback: Boolean = true,
     val mouseSensitivity: Float = 1.0f,
     val tapToClick: Boolean = true,

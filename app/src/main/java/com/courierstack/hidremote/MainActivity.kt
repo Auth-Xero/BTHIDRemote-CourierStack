@@ -323,6 +323,7 @@ fun HidRemoteApp(
                     settings = settings,
                     onUpdateDeviceName = { viewModel.updateDeviceName(it) },
                     onUpdateDeviceMode = { viewModel.updateDeviceMode(it) },
+                    onUpdateHidBackendMode = { viewModel.updateHidBackendMode(it) },
                     onUpdateHapticFeedback = { viewModel.updateHapticFeedback(it) },
                     onUpdateMouseSensitivity = { viewModel.updateMouseSensitivity(it) },
                     onUpdateTapToClick = { viewModel.updateTapToClick(it) },

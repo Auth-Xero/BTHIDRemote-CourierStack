@@ -19,6 +19,7 @@ class SettingsRepository(private val context: Context) {
     private object Keys {
         val DEVICE_NAME = stringPreferencesKey("device_name")
         val DEVICE_MODE = stringPreferencesKey("device_mode")
+        val HID_BACKEND_MODE = stringPreferencesKey("hid_backend_mode")
         val HAPTIC_FEEDBACK = booleanPreferencesKey("haptic_feedback")
         val MOUSE_SENSITIVITY = floatPreferencesKey("mouse_sensitivity")
         val TAP_TO_CLICK = booleanPreferencesKey("tap_to_click")
@@ -46,6 +47,9 @@ class SettingsRepository(private val context: Context) {
                 deviceName = prefs[Keys.DEVICE_NAME] ?: "BT HID Remote",
                 deviceMode = prefs[Keys.DEVICE_MODE]?.let { DeviceMode.valueOf(it) }
                     ?: DeviceMode.COMBO,
+                hidBackendMode = prefs[Keys.HID_BACKEND_MODE]?.let {
+                    try { HidBackendMode.valueOf(it) } catch (_: Exception) { null }
+                } ?: HidBackendMode.ANDROID_NATIVE,
                 hapticFeedback = prefs[Keys.HAPTIC_FEEDBACK] ?: true,
                 mouseSensitivity = prefs[Keys.MOUSE_SENSITIVITY] ?: 1.0f,
                 tapToClick = prefs[Keys.TAP_TO_CLICK] ?: true,
@@ -67,6 +71,12 @@ class SettingsRepository(private val context: Context) {
     suspend fun updateDeviceMode(mode: DeviceMode) {
         context.dataStore.edit { prefs ->
             prefs[Keys.DEVICE_MODE] = mode.name
+        }
+    }
+
+    suspend fun updateHidBackendMode(mode: HidBackendMode) {
+        context.dataStore.edit { prefs ->
+            prefs[Keys.HID_BACKEND_MODE] = mode.name
         }
     }
 
@@ -122,6 +132,7 @@ class SettingsRepository(private val context: Context) {
         context.dataStore.edit { prefs ->
             prefs[Keys.DEVICE_NAME] = settings.deviceName
             prefs[Keys.DEVICE_MODE] = settings.deviceMode.name
+            prefs[Keys.HID_BACKEND_MODE] = settings.hidBackendMode.name
             prefs[Keys.HAPTIC_FEEDBACK] = settings.hapticFeedback
             prefs[Keys.MOUSE_SENSITIVITY] = settings.mouseSensitivity
             prefs[Keys.TAP_TO_CLICK] = settings.tapToClick

@@ -13,6 +13,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.courierstack.hidremote.data.AppSettings
 import com.courierstack.hidremote.data.DeviceMode
+import com.courierstack.hidremote.data.HidBackendMode
 
 /**
  * Settings screen for configuring HID device options.
@@ -23,6 +24,7 @@ fun SettingsScreen(
     settings: AppSettings,
     onUpdateDeviceName: (String) -> Unit,
     onUpdateDeviceMode: (DeviceMode) -> Unit,
+    onUpdateHidBackendMode: (HidBackendMode) -> Unit = {},
     onUpdateHapticFeedback: (Boolean) -> Unit,
     onUpdateMouseSensitivity: (Float) -> Unit,
     onUpdateTapToClick: (Boolean) -> Unit,
@@ -33,6 +35,7 @@ fun SettingsScreen(
 ) {
     var showDeviceNameDialog by remember { mutableStateOf(false) }
     var showDeviceModeDialog by remember { mutableStateOf(false) }
+    var showBackendModeDialog by remember { mutableStateOf(false) }
 
     Column(
         modifier = modifier
@@ -66,6 +69,26 @@ fun SettingsScreen(
                 subtitle = "Automatically connect to last device",
                 checked = settings.autoConnect,
                 onCheckedChange = onUpdateAutoConnect
+            )
+        }
+
+        // Bluetooth Backend Section
+        SettingsSection(title = "Bluetooth Backend") {
+            SettingsItem(
+                icon = Icons.Default.Memory,
+                title = "HID Backend",
+                subtitle = settings.hidBackendMode.displayName,
+                onClick = { showBackendModeDialog = true }
+            )
+
+            // Explanatory text
+            Text(
+                text = "Android Native uses the built-in Bluetooth stack (recommended). " +
+                        "CourierStack is an experimental low-level backend. " +
+                        "Changing backend requires stopping and re-initializing the service.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
             )
         }
 
@@ -220,6 +243,76 @@ fun SettingsScreen(
             },
             confirmButton = {
                 TextButton(onClick = { showDeviceModeDialog = false }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
+
+    // Backend Mode Dialog
+    if (showBackendModeDialog) {
+        AlertDialog(
+            onDismissRequest = { showBackendModeDialog = false },
+            title = { Text("HID Backend") },
+            text = {
+                Column {
+                    HidBackendMode.entries.forEach { mode ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    onUpdateHidBackendMode(mode)
+                                    showBackendModeDialog = false
+                                }
+                                .padding(vertical = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            RadioButton(
+                                selected = settings.hidBackendMode == mode,
+                                onClick = {
+                                    onUpdateHidBackendMode(mode)
+                                    showBackendModeDialog = false
+                                }
+                            )
+                            Spacer(modifier = Modifier.width(12.dp))
+                            Column {
+                                Text(
+                                    text = mode.displayName,
+                                    style = MaterialTheme.typography.bodyLarge
+                                )
+                                Text(
+                                    text = when (mode) {
+                                        HidBackendMode.ANDROID_NATIVE ->
+                                            "Uses Android's built-in BluetoothHidDevice API. " +
+                                                    "No root required. Works on Android 9+."
+                                        HidBackendMode.COURIER_STACK ->
+                                            "Uses CourierStack low-level Bluetooth library. " +
+                                                    "Experimental — kills Android BT stack. " +
+                                                    "Use as backup if native mode fails."
+                                    },
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Surface(
+                        color = MaterialTheme.colorScheme.errorContainer,
+                        shape = MaterialTheme.shapes.small
+                    ) {
+                        Text(
+                            text = "After changing backend, stop the Bluetooth stack and re-initialize.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onErrorContainer,
+                            modifier = Modifier.padding(12.dp)
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showBackendModeDialog = false }) {
                     Text("Cancel")
                 }
             }

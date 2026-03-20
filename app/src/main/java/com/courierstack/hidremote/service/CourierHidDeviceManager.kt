@@ -50,8 +50,10 @@ import com.courierstack.security.le.BondingInfo as SmpBondingInfo
 /**
  * HID Device Manager that wraps CourierStack for HID device emulation.
  *
- * This implementation properly initializes CourierStack (following STFUinator's pattern)
- * and uses the existing HidDeviceProfile class for all HID protocol handling.
+ * This is the EXPERIMENTAL BACKUP backend. It takes over the Bluetooth HAL directly
+ * (killing the Android BT stack) and handles all HID protocol via CourierStack.
+ *
+ * Use [AndroidHidDeviceManager] (the default) unless this backend is specifically needed.
  *
  * Features:
  * - Proper HAL initialization with kill of Android Bluetooth stack
@@ -60,10 +62,10 @@ import com.courierstack.security.le.BondingInfo as SmpBondingInfo
  * - Makes device discoverable via HCI commands
  * - Keyboard, mouse, combo, and gamepad modes
  */
-class HidDeviceManager(private val context: Context) {
+class CourierHidDeviceManager(private val context: Context) : IHidDeviceManager {
 
     companion object {
-        private const val TAG = "HidDeviceManager"
+        private const val TAG = "CourierHidMgr"
         private const val MAX_KEYS = 6
 
         // SharedPreferences
@@ -167,22 +169,22 @@ class HidDeviceManager(private val context: Context) {
 
     // ==================== State ====================
     private val _connectionState = MutableStateFlow(ConnectionState.DISCONNECTED)
-    val connectionState: StateFlow<ConnectionState> = _connectionState.asStateFlow()
+    override val connectionState: StateFlow<ConnectionState> = _connectionState.asStateFlow()
 
     private val _connectedHost = MutableStateFlow<HostDevice?>(null)
-    val connectedHost: StateFlow<HostDevice?> = _connectedHost.asStateFlow()
+    override val connectedHost: StateFlow<HostDevice?> = _connectedHost.asStateFlow()
 
     private val _discoveredHosts = MutableStateFlow<List<HostDevice>>(emptyList())
-    val discoveredHosts: StateFlow<List<HostDevice>> = _discoveredHosts.asStateFlow()
+    override val discoveredHosts: StateFlow<List<HostDevice>> = _discoveredHosts.asStateFlow()
 
     private val _ledState = MutableStateFlow(KeyboardLedState())
-    val ledState: StateFlow<KeyboardLedState> = _ledState.asStateFlow()
+    override val ledState: StateFlow<KeyboardLedState> = _ledState.asStateFlow()
 
     private val _logs = MutableStateFlow<List<com.courierstack.hidremote.data.LogEntry>>(emptyList())
-    val logs: StateFlow<List<com.courierstack.hidremote.data.LogEntry>> = _logs.asStateFlow()
+    override val logs: StateFlow<List<com.courierstack.hidremote.data.LogEntry>> = _logs.asStateFlow()
 
     private val _errorChannel = Channel<String>(Channel.BUFFERED)
-    val errors: Flow<String> = _errorChannel.receiveAsFlow()
+    override val errors: Flow<String> = _errorChannel.receiveAsFlow()
 
     // ==================== Input State ====================
     private val pressedKeys = mutableSetOf<Int>()
@@ -593,7 +595,7 @@ class HidDeviceManager(private val context: Context) {
      *
      * @return true if initialized (or already was), false on error
      */
-    suspend fun initialize(settings: AppSettings): Boolean = withContext(Dispatchers.IO) {
+    override suspend fun initialize(settings: AppSettings): Boolean = withContext(Dispatchers.IO) {
         // Initialize file logging first
         initFileLogger()
         fileLog(TAG, "========== INITIALIZATION STARTED ==========")
@@ -913,7 +915,7 @@ class HidDeviceManager(private val context: Context) {
      *
      * @return true if pairing mode started, false if not initialized
      */
-    fun startPairing(): Boolean {
+    override fun startPairing(): Boolean {
         fileLog(TAG, "========================================")
         fileLog(TAG, "startPairing() called")
         fileLog(TAG, "========================================")
@@ -964,7 +966,7 @@ class HidDeviceManager(private val context: Context) {
     /**
      * Stop pairing mode - disable discovery.
      */
-    fun stopPairing() {
+    override fun stopPairing() {
         if (!initialized.get()) return
 
         isPairingMode.set(false)
@@ -986,14 +988,14 @@ class HidDeviceManager(private val context: Context) {
     /**
      * Alias for startPairing() - makes device visible for host connections.
      */
-    fun startAdvertising() {
+    override fun startAdvertising() {
         startPairing()
     }
 
     /**
      * Alias for stopPairing().
      */
-    fun stopAdvertising() {
+    override fun stopAdvertising() {
         stopPairing()
     }
 
@@ -1006,7 +1008,7 @@ class HidDeviceManager(private val context: Context) {
      * Note: For HID device role, we typically wait for hosts to connect to us,
      * but this can be useful to see what's around.
      */
-    fun startScanning() {
+    override fun startScanning() {
         if (!initialized.get()) {
             log(TAG, "Cannot scan - not initialized", LogLevel.WARNING)
             return
@@ -1026,7 +1028,7 @@ class HidDeviceManager(private val context: Context) {
         log(TAG, "Scanning for devices and advertising...", LogLevel.INFO)
     }
 
-    fun stopScanning() {
+    override fun stopScanning() {
         scannerManager?.stopAllScans()
         stopPairing()
         log(TAG, "Scanning stopped", LogLevel.INFO)
@@ -1040,7 +1042,7 @@ class HidDeviceManager(private val context: Context) {
 
     // ==================== Connection ====================
 
-    fun connectToHost(host: HostDevice) {
+    override fun connectToHost(host: HostDevice) {
         // For HID Device role, hosts connect to us - we just make ourselves connectable
         startAdvertising()
         log(TAG, "Ready for connection from ${host.displayName}", LogLevel.INFO)
@@ -1055,7 +1057,7 @@ class HidDeviceManager(private val context: Context) {
      * @param address Bluetooth address in "XX:XX:XX:XX:XX:XX" format
      * @return true if device is ready for connection
      */
-    fun connectToBondedDevice(address: String): Boolean {
+    override fun connectToBondedDevice(address: String): Boolean {
         fileLog(TAG, "========================================")
         fileLog(TAG, "connectToBondedDevice() called for: $address")
         fileLog(TAG, "========================================")
@@ -1251,7 +1253,7 @@ class HidDeviceManager(private val context: Context) {
      *
      * @return true if connection attempt started, false if no bonds or error
      */
-    fun connectToAnyBondedDevice(): Boolean {
+    override fun connectToAnyBondedDevice(): Boolean {
         val bonds = getBondedDevices()
         if (bonds.isEmpty()) {
             log(TAG, "No bonded devices to connect to", LogLevel.INFO)
@@ -1264,7 +1266,7 @@ class HidDeviceManager(private val context: Context) {
         return connectToBondedDevice(address)
     }
 
-    fun disconnect() {
+    override fun disconnect() {
         // Set flag BEFORE sending HCI disconnect so the onHostDisconnected
         // callback knows not to auto-reconnect.
         userDisconnecting.set(true)
@@ -1305,20 +1307,20 @@ class HidDeviceManager(private val context: Context) {
 
     // ==================== Keyboard Input ====================
 
-    fun pressKey(keyCode: Int, modifiers: ModifierState = currentModifiers) {
+    override fun pressKey(keyCode: Int, modifiers: ModifierState) {
         if (!isConnected() || !canSendKeyboard()) return
         currentModifiers = modifiers
         if (pressedKeys.size < MAX_KEYS) pressedKeys.add(keyCode)
         sendKeyboardReport()
     }
 
-    fun releaseKey(keyCode: Int) {
+    override fun releaseKey(keyCode: Int) {
         if (!isConnected() || !canSendKeyboard()) return
         pressedKeys.remove(keyCode)
         sendKeyboardReport()
     }
 
-    fun typeKey(keyCode: Int, modifiers: ModifierState = ModifierState()) {
+    override fun typeKey(keyCode: Int, modifiers: ModifierState) {
         if (!isConnected() || !canSendKeyboard()) return
         scope.launch {
             currentModifiers = modifiers
@@ -1335,7 +1337,7 @@ class HidDeviceManager(private val context: Context) {
      * Atomically send a key press with specific modifiers, then release.
      * Used for shortcuts like Ctrl+C where modifier and key must be in the same report.
      */
-    fun typeKeyWithModifiers(keyCode: Int, modifiers: ModifierState) {
+    override fun typeKeyWithModifiers(keyCode: Int, modifiers: ModifierState) {
         if (!isConnected() || !canSendKeyboard()) return
         scope.launch {
             // Send press report with modifiers + key
@@ -1359,7 +1361,7 @@ class HidDeviceManager(private val context: Context) {
         }
     }
 
-    fun typeText(text: String, delayMs: Long = 30) {
+    override fun typeText(text: String, delayMs: Long) {
         if (!isConnected() || !canSendKeyboard()) return
         scope.launch {
             for (char in text) {
@@ -1372,13 +1374,13 @@ class HidDeviceManager(private val context: Context) {
         }
     }
 
-    fun releaseAllKeys() {
+    override fun releaseAllKeys() {
         pressedKeys.clear()
         currentModifiers = ModifierState()
         if (isConnected() && canSendKeyboard()) sendKeyboardReport()
     }
 
-    fun setModifiers(modifiers: ModifierState) {
+    override fun setModifiers(modifiers: ModifierState) {
         currentModifiers = modifiers
         if (isConnected() && canSendKeyboard()) sendKeyboardReport()
     }
@@ -1410,17 +1412,17 @@ class HidDeviceManager(private val context: Context) {
 
     // ==================== Mouse Input ====================
 
-    fun moveMouse(dx: Int, dy: Int) {
+    override fun moveMouse(dx: Int, dy: Int) {
         if (!isConnected() || !canSendMouse()) return
         sendMouseReport(currentMouseButtons.toByte(), dx, dy, 0)
     }
 
-    fun scroll(amount: Int) {
+    override fun scroll(amount: Int) {
         if (!isConnected() || !canSendMouse()) return
         sendMouseReport(currentMouseButtons.toByte(), 0, 0, amount)
     }
 
-    fun pressMouseButton(button: Int) {
+    override fun pressMouseButton(button: Int) {
         if (!isConnected() || !canSendMouse()) return
         currentMouseButtons = when (button) {
             MouseButtons.LEFT -> currentMouseButtons.copy(left = true)
@@ -1431,7 +1433,7 @@ class HidDeviceManager(private val context: Context) {
         sendMouseReport(currentMouseButtons.toByte(), 0, 0, 0)
     }
 
-    fun releaseMouseButton(button: Int) {
+    override fun releaseMouseButton(button: Int) {
         if (!isConnected() || !canSendMouse()) return
         currentMouseButtons = when (button) {
             MouseButtons.LEFT -> currentMouseButtons.copy(left = false)
@@ -1442,7 +1444,7 @@ class HidDeviceManager(private val context: Context) {
         sendMouseReport(currentMouseButtons.toByte(), 0, 0, 0)
     }
 
-    fun clickMouseButton(button: Int) {
+    override fun clickMouseButton(button: Int) {
         if (!isConnected() || !canSendMouse()) return
         pressMouseButton(button)
         scope.launch {
@@ -1484,15 +1486,15 @@ class HidDeviceManager(private val context: Context) {
      * @param rightTrigger right trigger (0-255)
      * @param dpad hat switch (0-7, or 0x0F for center/neutral)
      */
-    fun sendGamepad(
-        buttons: Int = 0,
-        leftX: Int = 128,
-        leftY: Int = 128,
-        rightX: Int = 128,
-        rightY: Int = 128,
-        leftTrigger: Int = 0,
-        rightTrigger: Int = 0,
-        dpad: Int = 0x0F
+    override fun sendGamepad(
+        buttons: Int,
+        leftX: Int,
+        leftY: Int,
+        rightX: Int,
+        rightY: Int,
+        leftTrigger: Int,
+        rightTrigger: Int,
+        dpad: Int
     ) {
         if (!isConnected() || !canSendGamepad()) return
         val host = currentHostConnection ?: return
@@ -1517,10 +1519,10 @@ class HidDeviceManager(private val context: Context) {
 
     // ==================== Utility ====================
 
-    fun isConnected(): Boolean = _connectionState.value == ConnectionState.CONNECTED &&
+    override fun isConnected(): Boolean = _connectionState.value == ConnectionState.CONNECTED &&
             currentHostConnection?.isConnected == true
 
-    fun isInitialized(): Boolean = initialized.get()
+    override fun isInitialized(): Boolean = initialized.get()
 
     private fun clearInputState() {
         pressedKeys.clear()
@@ -1528,7 +1530,7 @@ class HidDeviceManager(private val context: Context) {
         currentMouseButtons = MouseButtonState()
     }
 
-    fun updateConfiguration(settings: AppSettings) {
+    override fun updateConfiguration(settings: AppSettings) {
         val modeChanged = deviceMode != settings.deviceMode
         val nameChanged = deviceName != settings.deviceName
 
@@ -1709,7 +1711,7 @@ class HidDeviceManager(private val context: Context) {
     /**
      * Clear all stored bonds (useful for debugging or unpairing all devices).
      */
-    fun clearAllBonds() {
+    override fun clearAllBonds() {
         prefs.edit().remove(KEY_BONDED_DEVICES).apply()
         log(TAG, "All stored bonds cleared", LogLevel.INFO)
     }
@@ -1717,7 +1719,7 @@ class HidDeviceManager(private val context: Context) {
     /**
      * Remove bond for a specific device.
      */
-    fun removeBond(address: String) {
+    override fun removeBond(address: String) {
         val bonds = loadAllBonds().toMutableMap()
         if (bonds.remove(address) != null) {
             val jsonArray = JSONArray()
@@ -1737,11 +1739,11 @@ class HidDeviceManager(private val context: Context) {
     /**
      * Get list of bonded device addresses.
      */
-    fun getBondedDevices(): List<String> {
+    override fun getBondedDevices(): List<String> {
         return loadAllBonds().keys.toList()
     }
 
-    fun shutdown() {
+    override fun shutdown() {
         fileLog(TAG, "========================================")
         fileLog(TAG, "SHUTDOWN STARTED")
         fileLog(TAG, "========================================")

@@ -14,7 +14,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.courierstack.hidremote.data.*
 import com.courierstack.hidremote.service.HidConnectionService
-import com.courierstack.hidremote.service.HidDeviceManager
+import com.courierstack.hidremote.service.IHidDeviceManager
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
@@ -26,7 +26,8 @@ import kotlinx.coroutines.launch
  * Main ViewModel for the HID Remote application.
  *
  * Manages connection to HidConnectionService and provides UI state.
- * All state flows are properly exposed and synchronized across screens.
+ * All HID operations go through [IHidDeviceManager] — the ViewModel is
+ * completely backend-agnostic (Android native vs CourierStack).
  */
 class HidRemoteViewModel(application: Application) : AndroidViewModel(application) {
 
@@ -34,7 +35,7 @@ class HidRemoteViewModel(application: Application) : AndroidViewModel(applicatio
 
     // Service connection
     private var hidService: HidConnectionService? = null
-    private var hidManager: HidDeviceManager? = null
+    private var hidManager: IHidDeviceManager? = null
     private var serviceBound = false
 
     // UI State
@@ -136,7 +137,7 @@ class HidRemoteViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     /**
-     * Observe state flows from HidDeviceManager and propagate to our exposed flows.
+     * Observe state flows from IHidDeviceManager and propagate to our exposed flows.
      * This ensures state is synchronized across all screens.
      *
      * Runs inside a coroutineScope so all child collectors cancel together
@@ -207,6 +208,9 @@ class HidRemoteViewModel(application: Application) : AndroidViewModel(applicatio
     /**
      * Initialize the Bluetooth stack. Can only be done once per session.
      * After initialization, call startPairing() to make device discoverable.
+     *
+     * The backend (Android native vs CourierStack) is selected automatically
+     * based on the current [AppSettings.hidBackendMode].
      */
     fun initialize() {
         viewModelScope.launch {
@@ -225,7 +229,16 @@ class HidRemoteViewModel(application: Application) : AndroidViewModel(applicatio
             _uiState.update { it.copy(isInitializing = true) }
 
             val currentSettings = settings.first()
+
+            // Service will pick the correct backend based on settings
             val success = hidService?.initialize(currentSettings) ?: false
+
+            // After initialize, the service may have swapped backends — re-grab the reference
+            hidManager = hidService?.hidManager
+
+            // Restart observation on the (possibly new) manager
+            observationJob?.cancel()
+            observationJob = viewModelScope.launch { observeHidManagerState() }
 
             _uiState.update { it.copy(isInitializing = false) }
 
@@ -237,7 +250,6 @@ class HidRemoteViewModel(application: Application) : AndroidViewModel(applicatio
                 if (currentSettings.autoConnect && currentSettings.lastConnectedAddress != null) {
                     val bonded = hidManager?.getBondedDevices() ?: emptyList()
                     if (bonded.contains(currentSettings.lastConnectedAddress)) {
-                        // Start pairing mode to allow reconnection
                         startPairing()
                     }
                 }
@@ -279,24 +291,15 @@ class HidRemoteViewModel(application: Application) : AndroidViewModel(applicatio
 
     // ==================== Bonded Devices ====================
 
-    /**
-     * Refresh the list of bonded devices from HidDeviceManager.
-     */
     fun refreshBondedDevices() {
         _bondedDevices.value = hidManager?.getBondedDevices() ?: emptyList()
     }
 
-    /**
-     * Remove a bond for a specific device.
-     */
     fun removeBond(address: String) {
         hidManager?.removeBond(address)
         refreshBondedDevices()
     }
 
-    /**
-     * Clear all stored bonds.
-     */
     fun clearAllBonds() {
         hidManager?.clearAllBonds()
         refreshBondedDevices()
@@ -304,10 +307,6 @@ class HidRemoteViewModel(application: Application) : AndroidViewModel(applicatio
 
     // ==================== Pairing ====================
 
-    /**
-     * Start pairing mode - makes the device discoverable for hosts.
-     * Must be initialized first.
-     */
     fun startPairing() {
         if (hidManager?.isInitialized() != true) {
             viewModelScope.launch {
@@ -324,23 +323,14 @@ class HidRemoteViewModel(application: Application) : AndroidViewModel(applicatio
         }
     }
 
-    /**
-     * Stop pairing mode - hides device from discovery.
-     */
     fun stopPairing() {
         hidManager?.stopPairing()
     }
 
-    /**
-     * Alias for startPairing().
-     */
     fun startAdvertising() {
         startPairing()
     }
 
-    /**
-     * Alias for stopPairing().
-     */
     fun stopAdvertising() {
         stopPairing()
     }
@@ -355,10 +345,6 @@ class HidRemoteViewModel(application: Application) : AndroidViewModel(applicatio
         hidManager?.stopScanning()
     }
 
-    /**
-     * Connect to a host - for HID device role, this makes us discoverable
-     * and waits for the host to connect to us.
-     */
     fun connectToHost(host: HostDevice) {
         viewModelScope.launch {
             hidManager?.connectToHost(host)
@@ -366,10 +352,6 @@ class HidRemoteViewModel(application: Application) : AndroidViewModel(applicatio
         }
     }
 
-    /**
-     * Connect to a previously bonded device by address.
-     * Initiates active reconnection (HCI Create_Connection) plus passive mode.
-     */
     fun connectToBondedDevice(address: String) {
         if (hidManager?.isInitialized() != true) {
             viewModelScope.launch {
@@ -378,7 +360,6 @@ class HidRemoteViewModel(application: Application) : AndroidViewModel(applicatio
             return
         }
 
-        // connectToBondedDevice returns immediately — heavy work runs on IO internally
         val success = hidManager?.connectToBondedDevice(address) ?: false
 
         viewModelScope.launch {
@@ -411,11 +392,6 @@ class HidRemoteViewModel(application: Application) : AndroidViewModel(applicatio
         hapticFeedback()
     }
 
-    /**
-     * Type a key with specific modifiers atomically (for shortcuts like Ctrl+C).
-     * This ensures the modifier and key are sent together in one report,
-     * avoiding race conditions from toggling modifiers separately.
-     */
     fun typeKeyWithModifiers(keyCode: Int, modifiers: ModifierState) {
         hidManager?.typeKeyWithModifiers(keyCode, modifiers)
         hapticFeedback()
@@ -519,6 +495,18 @@ class HidRemoteViewModel(application: Application) : AndroidViewModel(applicatio
     fun updateDeviceMode(mode: DeviceMode) {
         viewModelScope.launch {
             settingsRepository.updateDeviceMode(mode)
+        }
+    }
+
+    /**
+     * Update the HID backend mode.
+     *
+     * NOTE: Changing backend requires re-initialization. The user must stop
+     * the service and re-initialize after switching backends.
+     */
+    fun updateHidBackendMode(mode: HidBackendMode) {
+        viewModelScope.launch {
+            settingsRepository.updateHidBackendMode(mode)
         }
     }
 
